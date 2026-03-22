@@ -1,0 +1,25 @@
+name: Keep Render Alive
+
+on:
+  schedule:
+    - cron: '*/10 20-23 * * *'  # UTC 20:30〜23:59（JST 05:30〜08:59）
+    - cron: '*/10 0-12 * * *'   # UTC 00:00〜12:59（JST 09:00〜21:59）
+  workflow_dispatch:             # 手動実行ボタン
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Render（JST 5:30〜22:00 の間のみ）
+        run: |
+          HOUR=$(TZ='Asia/Tokyo' date +%H)
+          MIN=$(TZ='Asia/Tokyo' date +%M)
+          TIME=$((10#$HOUR * 60 + 10#$MIN))
+
+          if [ $TIME -ge 330 ] && [ $TIME -le 1320 ]; then
+            echo "JST $(TZ='Asia/Tokyo' date '+%H:%M') — サーバーにアクセスします"
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ secrets.RENDER_URL }}/")
+            echo "レスポンス: $STATUS"
+          else
+            echo "JST $(TZ='Asia/Tokyo' date '+%H:%M') — 稼働時間外のためスキップ"
+          fi

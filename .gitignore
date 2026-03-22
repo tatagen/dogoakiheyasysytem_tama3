@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.pyo
+uvicorn.stdout.log
+uvicorn.stderr.log
+preview_A.html
+preview_B.html
+preview_C.html
+.env
