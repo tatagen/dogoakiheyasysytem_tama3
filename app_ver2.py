@@ -1599,8 +1599,9 @@ except Exception:
 
 SESSION_COOKIE = "dogo_session"
 SESSION_MAX_AGE = 60 * 60 * 12
-LOGIN_WINDOW_SECONDS = 10 * 60
+LOGIN_WINDOW_SECONDS = 30 * 60
 LOGIN_MAX_ATTEMPTS = 5
+PERMANENT_BAN_THRESHOLD = 40
 APP_USERNAME = os.getenv("DOGO_APP_USERNAME", "staff")
 APP_PASSWORD = os.getenv("DOGO_APP_PASSWORD", "ChangeMe123!")
 SESSION_SECRET = os.getenv("DOGO_SESSION_SECRET", "change-this-session-secret")
@@ -1608,6 +1609,8 @@ ALLOWED_HOST_SUFFIXES = tuple(
     x.strip() for x in os.getenv("DOGO_ALLOWED_HOSTS", "localhost,127.0.0.1,.onrender.com").split(",") if x.strip()
 )
 LOGIN_ATTEMPTS: Dict[str, List[float]] = {}
+PERMANENT_BANS: set = set()
+TOTAL_FAILURES: Dict[str, int] = {}
 
 
 # メモリ上の簡易データベース
@@ -1676,6 +1679,8 @@ def save_state():
                 "history": HISTORY,
                 "canceled": CANCELED,
                 "seq_counter": SEQ_COUNTER,
+                "permanent_bans": list(PERMANENT_BANS),
+                "total_failures": TOTAL_FAILURES,
             },
             "updated_at": datetime.now(TZ).isoformat(),
         }
@@ -1715,6 +1720,10 @@ def load_state():
         HISTORY[:] = d["history"]
         CANCELED[:] = d["canceled"]
         SEQ_COUNTER = d["seq_counter"]
+        PERMANENT_BANS.clear()
+        PERMANENT_BANS.update(d.get("permanent_bans", []))
+        TOTAL_FAILURES.clear()
+        TOTAL_FAILURES.update(d.get("total_failures", {}))
     except Exception:
         pass
 
@@ -1868,6 +1877,10 @@ async def security_middleware(request: Request, call_next):
 @app.post("/api/login")
 async def login_api(request: Request, body: dict):
     ip = get_client_ip(request)
+
+    if ip in PERMANENT_BANS:
+        return JSONResponse({"ok": False, "msg": "このアクセス元は永久にブロックされています。"}, status_code=403)
+
     attempts = prune_login_attempts(ip)
     if len(attempts) >= LOGIN_MAX_ATTEMPTS:
         return JSONResponse({"ok": False, "msg": "試行回数が多すぎます。しばらく待ってから再試行してください。"}, status_code=429)
@@ -1877,6 +1890,11 @@ async def login_api(request: Request, body: dict):
     if username != APP_USERNAME or password != APP_PASSWORD:
         attempts.append(time.time())
         LOGIN_ATTEMPTS[ip] = attempts
+        TOTAL_FAILURES[ip] = TOTAL_FAILURES.get(ip, 0) + 1
+        if TOTAL_FAILURES[ip] >= PERMANENT_BAN_THRESHOLD:
+            PERMANENT_BANS.add(ip)
+            save_state()
+            return JSONResponse({"ok": False, "msg": "このアクセス元は永久にブロックされています。"}, status_code=403)
         return JSONResponse({"ok": False, "msg": "ユーザー名またはパスワードが違います。"}, status_code=401)
 
     LOGIN_ATTEMPTS[ip] = []
