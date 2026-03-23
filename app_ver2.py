@@ -1582,6 +1582,7 @@ from zoneinfo import ZoneInfo
 import base64
 import hashlib
 import hmac
+import httpx
 import json
 import os
 import secrets
@@ -1646,6 +1647,79 @@ CANCELED: List[dict] = []
 
 
 SEQ_COUNTER = 1
+
+# ── Supabase永続化 ───────────────────────────────────────────
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+
+def _supa_headers():
+    return {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates",
+    }
+
+def save_state():
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return
+    try:
+        today = datetime.now(TZ).strftime("%Y-%m-%d")
+        payload = {
+            "id": 1,
+            "state_date": today,
+            "data": {
+                "rooms": {str(k): v for k, v in ROOMS.items()},
+                "requests": REQUESTS,
+                "pending": PENDING,
+                "heading": HEADING,
+                "history": HISTORY,
+                "canceled": CANCELED,
+                "seq_counter": SEQ_COUNTER,
+            },
+            "updated_at": datetime.now(TZ).isoformat(),
+        }
+        httpx.post(
+            f"{SUPABASE_URL}/rest/v1/app_state",
+            headers=_supa_headers(),
+            json=payload,
+            timeout=5,
+        )
+    except Exception:
+        pass
+
+def load_state():
+    global SEQ_COUNTER
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return
+    try:
+        res = httpx.get(
+            f"{SUPABASE_URL}/rest/v1/app_state?id=eq.1",
+            headers=_supa_headers(),
+            timeout=5,
+        )
+        rows = res.json()
+        if not rows:
+            return
+        row = rows[0]
+        today = datetime.now(TZ).strftime("%Y-%m-%d")
+        if row.get("state_date") != today:
+            return  # 別の日のデータは使わない（毎朝リセット）
+        d = row["data"]
+        ROOMS.clear()
+        ROOMS.update({int(k): v for k, v in d["rooms"].items()})
+        REQUESTS.clear()
+        REQUESTS.update(d["requests"])
+        PENDING[:] = d["pending"]
+        HEADING[:] = d["heading"]
+        HISTORY[:] = d["history"]
+        CANCELED[:] = d["canceled"]
+        SEQ_COUNTER = d["seq_counter"]
+    except Exception:
+        pass
+
+load_state()
+# ─────────────────────────────────────────────────────────────
 
 def now_str() -> str:
     return datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S")
@@ -1775,6 +1849,13 @@ async def security_middleware(request: Request, call_next):
         response = HTMLResponse(LOGIN_HTML)
     else:
         response = await call_next(request)
+
+    # データ変更POSTのあとに状態をファイルへ保存
+    if (request.method == "POST"
+            and request.url.path.startswith("/api/")
+            and request.url.path not in ("/api/login", "/api/logout")
+            and response.status_code < 400):
+        save_state()
 
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-Content-Type-Options"] = "nosniff"
