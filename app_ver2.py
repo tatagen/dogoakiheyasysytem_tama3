@@ -1598,7 +1598,7 @@ except Exception:
     TZ = timezone(timedelta(hours=9))
 
 SESSION_COOKIE = "dogo_session"
-SESSION_MAX_AGE = 60 * 60 * 12
+SESSION_MAX_AGE = 60 * 60 * 17 + 60 * 30
 LOGIN_WINDOW_SECONDS = 30 * 60
 LOGIN_MAX_ATTEMPTS = 5
 PERMANENT_BAN_THRESHOLD = 40
