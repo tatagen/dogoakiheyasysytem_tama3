@@ -1651,9 +1651,10 @@ CANCELED: List[dict] = []
 
 SEQ_COUNTER = 1
 
-# ── Supabase永続化 ───────────────────────────────────────────
+# ── データ永続化（Supabase優先・なければローカルファイル）────────
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.json")
 
 def _supa_headers():
     return {
@@ -1663,69 +1664,76 @@ def _supa_headers():
         "Prefer": "resolution=merge-duplicates",
     }
 
+def _state_data():
+    return {
+        "rooms": {str(k): v for k, v in ROOMS.items()},
+        "requests": REQUESTS,
+        "pending": PENDING,
+        "heading": HEADING,
+        "history": HISTORY,
+        "canceled": CANCELED,
+        "seq_counter": SEQ_COUNTER,
+        "permanent_bans": list(PERMANENT_BANS),
+        "total_failures": TOTAL_FAILURES,
+    }
+
+def _apply_state(d):
+    global SEQ_COUNTER
+    ROOMS.clear()
+    ROOMS.update({int(k): v for k, v in d["rooms"].items()})
+    REQUESTS.clear()
+    REQUESTS.update(d["requests"])
+    PENDING[:] = d["pending"]
+    HEADING[:] = d["heading"]
+    HISTORY[:] = d["history"]
+    CANCELED[:] = d["canceled"]
+    SEQ_COUNTER = d["seq_counter"]
+    PERMANENT_BANS.clear()
+    PERMANENT_BANS.update(d.get("permanent_bans", []))
+    TOTAL_FAILURES.clear()
+    TOTAL_FAILURES.update(d.get("total_failures", {}))
+
 def save_state():
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        return
-    try:
-        today = datetime.now(TZ).strftime("%Y-%m-%d")
-        payload = {
-            "id": 1,
-            "state_date": today,
-            "data": {
-                "rooms": {str(k): v for k, v in ROOMS.items()},
-                "requests": REQUESTS,
-                "pending": PENDING,
-                "heading": HEADING,
-                "history": HISTORY,
-                "canceled": CANCELED,
-                "seq_counter": SEQ_COUNTER,
-                "permanent_bans": list(PERMANENT_BANS),
-                "total_failures": TOTAL_FAILURES,
-            },
-            "updated_at": datetime.now(TZ).isoformat(),
-        }
-        httpx.post(
-            f"{SUPABASE_URL}/rest/v1/app_state",
-            headers=_supa_headers(),
-            json=payload,
-            timeout=5,
-        )
-    except Exception:
-        pass
+    today = datetime.now(TZ).strftime("%Y-%m-%d")
+    if SUPABASE_URL and SUPABASE_KEY:
+        try:
+            httpx.post(
+                f"{SUPABASE_URL}/rest/v1/app_state",
+                headers=_supa_headers(),
+                json={"id": 1, "state_date": today, "data": _state_data(), "updated_at": datetime.now(TZ).isoformat()},
+                timeout=5,
+            )
+        except Exception:
+            pass
+    else:
+        try:
+            with open(STATE_FILE, "w", encoding="utf-8") as f:
+                json.dump({"saved_date": today, "data": _state_data()}, f, ensure_ascii=False)
+        except Exception:
+            pass
 
 def load_state():
-    global SEQ_COUNTER
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        return
-    try:
-        res = httpx.get(
-            f"{SUPABASE_URL}/rest/v1/app_state?id=eq.1",
-            headers=_supa_headers(),
-            timeout=5,
-        )
-        rows = res.json()
-        if not rows:
-            return
-        row = rows[0]
-        today = datetime.now(TZ).strftime("%Y-%m-%d")
-        if row.get("state_date") != today:
-            return  # 別の日のデータは使わない（毎朝リセット）
-        d = row["data"]
-        ROOMS.clear()
-        ROOMS.update({int(k): v for k, v in d["rooms"].items()})
-        REQUESTS.clear()
-        REQUESTS.update(d["requests"])
-        PENDING[:] = d["pending"]
-        HEADING[:] = d["heading"]
-        HISTORY[:] = d["history"]
-        CANCELED[:] = d["canceled"]
-        SEQ_COUNTER = d["seq_counter"]
-        PERMANENT_BANS.clear()
-        PERMANENT_BANS.update(d.get("permanent_bans", []))
-        TOTAL_FAILURES.clear()
-        TOTAL_FAILURES.update(d.get("total_failures", {}))
-    except Exception:
-        pass
+    today = datetime.now(TZ).strftime("%Y-%m-%d")
+    if SUPABASE_URL and SUPABASE_KEY:
+        try:
+            res = httpx.get(f"{SUPABASE_URL}/rest/v1/app_state?id=eq.1", headers=_supa_headers(), timeout=5)
+            rows = res.json()
+            if not rows or rows[0].get("state_date") != today:
+                return
+            _apply_state(rows[0]["data"])
+        except Exception:
+            pass
+    else:
+        try:
+            if not os.path.exists(STATE_FILE):
+                return
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+            if saved.get("saved_date") != today:
+                return
+            _apply_state(saved["data"])
+        except Exception:
+            pass
 
 load_state()
 # ─────────────────────────────────────────────────────────────
