@@ -2,31 +2,43 @@ from js import Response, Headers
 
 _app = None
 _ready = False
+_init_error = None
 
 
 async def _ensure_app():
-    global _app, _ready
+    global _app, _ready, _init_error
     if _ready:
         return
-    import micropip
-    await micropip.install([
-        "fastapi",
-        "starlette",
-        "pydantic",
-        "anyio",
-        "sniffio",
-        "typing_extensions",
-    ])
-    import importlib
-    importlib.invalidate_caches()
-    import main_app
-    _app = main_app.app
+    try:
+        import importlib
+        importlib.invalidate_caches()
+        import main_app
+        _app = main_app.app
+    except Exception:
+        import traceback
+        _init_error = traceback.format_exc()
     _ready = True
+
+
+def _err_response(msg: str, status: int = 500):
+    h = Headers.new([["content-type", "text/plain; charset=utf-8"]])
+    return Response.new(msg, status=status, headers=h)
 
 
 async def on_fetch(request, env):
     await _ensure_app()
-    return await _run_asgi(request, env)
+
+    if _init_error:
+        return _err_response(f"[init error]\n{_init_error}")
+
+    if _app is None:
+        return _err_response("app failed to load")
+
+    try:
+        return await _run_asgi(request, env)
+    except Exception:
+        import traceback
+        return _err_response(f"[runtime error]\n{traceback.format_exc()}")
 
 
 async def _run_asgi(js_req, env):
@@ -36,7 +48,6 @@ async def _run_asgi(js_req, env):
     parsed = urlparse(url_str)
     method = str(js_req.method).upper()
 
-    # Collect request headers as ASGI byte pairs
     raw_headers = []
     try:
         for pair in js_req.headers.entries():
@@ -44,7 +55,6 @@ async def _run_asgi(js_req, env):
     except Exception:
         pass
 
-    # Read request body (skip for GET / HEAD)
     body = b""
     if method not in ("GET", "HEAD"):
         try:
@@ -93,4 +103,6 @@ async def _run_asgi(js_req, env):
     await _app(scope, receive, send)
 
     headers_obj = Headers.new(resp_header_pairs)
-    return Response.new(bytes(resp_body), status=status_code[0], headers=headers_obj)
+    # Pass decoded string — Pyodide converts raw bytes to repr "b'...'" otherwise
+    body_str = resp_body.decode("utf-8", errors="replace")
+    return Response.new(body_str, status=status_code[0], headers=headers_obj)

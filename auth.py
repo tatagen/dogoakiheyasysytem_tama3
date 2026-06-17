@@ -7,7 +7,12 @@ import secrets
 import time
 from typing import List
 
-from state import LOGIN_ATTEMPTS, PERMANENT_BANS, TOTAL_FAILURES
+try:
+    from state import LOGIN_ATTEMPTS, PERMANENT_BANS, TOTAL_FAILURES
+except ImportError:
+    LOGIN_ATTEMPTS = {}
+    PERMANENT_BANS = set()
+    TOTAL_FAILURES = {}
 
 SESSION_COOKIE = "dogo_session"
 SESSION_MAX_AGE = 60 * 60 * 17 + 60 * 30
