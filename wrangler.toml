@@ -1,0 +1,8 @@
+name = "dogo-room-manager"
+main = "app_ver2.py"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["python_workers"]
+
+[[kv_namespaces]]
+binding = "STATE_KV"
+id = "REPLACE_WITH_YOUR_KV_ID"

@@ -1574,6 +1574,7 @@ setInterval(keepRenderAwake, 10 * 60 * 1000);
 # ========================
 # ここから Python(FastAPI)
 # ========================
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from datetime import datetime, timedelta, timezone
@@ -1582,7 +1583,6 @@ from zoneinfo import ZoneInfo
 import base64
 import hashlib
 import hmac
-import httpx
 import json
 import os
 import secrets
@@ -1606,7 +1606,7 @@ APP_USERNAME = os.getenv("DOGO_APP_USERNAME", "staff")
 APP_PASSWORD = os.getenv("DOGO_APP_PASSWORD", "ChangeMe123!")
 SESSION_SECRET = os.getenv("DOGO_SESSION_SECRET", "change-this-session-secret")
 ALLOWED_HOST_SUFFIXES = tuple(
-    x.strip() for x in os.getenv("DOGO_ALLOWED_HOSTS", "localhost,127.0.0.1,.onrender.com").split(",") if x.strip()
+    x.strip() for x in os.getenv("DOGO_ALLOWED_HOSTS", "localhost,127.0.0.1,.workers.dev").split(",") if x.strip()
 )
 LOGIN_ATTEMPTS: Dict[str, List[float]] = {}
 PERMANENT_BANS: set = set()
@@ -1651,18 +1651,8 @@ CANCELED: List[dict] = []
 
 SEQ_COUNTER = 1
 
-# ── データ永続化（Supabase優先・なければローカルファイル）────────
-SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
-STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.json")
-
-def _supa_headers():
-    return {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": "application/json",
-        "Prefer": "resolution=merge-duplicates",
-    }
+# ── データ永続化（Cloudflare KV）────────────────────────────
+_STATE_LOADED = False
 
 def _state_data():
     return {
@@ -1693,49 +1683,38 @@ def _apply_state(d):
     TOTAL_FAILURES.clear()
     TOTAL_FAILURES.update(d.get("total_failures", {}))
 
-def save_state():
-    today = datetime.now(TZ).strftime("%Y-%m-%d")
-    if SUPABASE_URL and SUPABASE_KEY:
-        try:
-            httpx.post(
-                f"{SUPABASE_URL}/rest/v1/app_state",
-                headers=_supa_headers(),
-                json={"id": 1, "state_date": today, "data": _state_data(), "updated_at": datetime.now(TZ).isoformat()},
-                timeout=5,
-            )
-        except Exception:
-            pass
-    else:
-        try:
-            with open(STATE_FILE, "w", encoding="utf-8") as f:
-                json.dump({"saved_date": today, "data": _state_data()}, f, ensure_ascii=False)
-        except Exception:
-            pass
+def _get_kv(request: Request):
+    env = request.scope.get("cloudflare.workers.env") or request.scope.get("env")
+    if env is None:
+        return None
+    return getattr(env, "STATE_KV", None)
 
-def load_state():
+async def save_state(request: Request):
+    kv = _get_kv(request)
+    if kv is None:
+        return
     today = datetime.now(TZ).strftime("%Y-%m-%d")
-    if SUPABASE_URL and SUPABASE_KEY:
-        try:
-            res = httpx.get(f"{SUPABASE_URL}/rest/v1/app_state?id=eq.1", headers=_supa_headers(), timeout=5)
-            rows = res.json()
-            if not rows or rows[0].get("state_date") != today:
-                return
-            _apply_state(rows[0]["data"])
-        except Exception:
-            pass
-    else:
-        try:
-            if not os.path.exists(STATE_FILE):
-                return
-            with open(STATE_FILE, "r", encoding="utf-8") as f:
-                saved = json.load(f)
-            if saved.get("saved_date") != today:
-                return
-            _apply_state(saved["data"])
-        except Exception:
-            pass
+    try:
+        data = json.dumps({"saved_date": today, "data": _state_data()}, ensure_ascii=False)
+        await kv.put("state", data)
+    except Exception:
+        pass
 
-load_state()
+async def load_state(request: Request):
+    kv = _get_kv(request)
+    if kv is None:
+        return
+    today = datetime.now(TZ).strftime("%Y-%m-%d")
+    try:
+        raw = await kv.get("state")
+        if not raw:
+            return
+        saved = json.loads(raw)
+        if saved.get("saved_date") != today:
+            return
+        _apply_state(saved["data"])
+    except Exception:
+        pass
 # ─────────────────────────────────────────────────────────────
 
 def now_str() -> str:
@@ -1846,6 +1825,11 @@ def is_authenticated(request: Request) -> bool:
 
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
+    global _STATE_LOADED
+    if not _STATE_LOADED:
+        await load_state(request)
+        _STATE_LOADED = True
+
     host = (request.headers.get("host") or "").split(":")[0]
     if host and not any(host == allowed or host.endswith(allowed) for allowed in ALLOWED_HOST_SUFFIXES):
         return JSONResponse({"ok": False, "msg": "invalid host"}, status_code=400)
@@ -1867,12 +1851,12 @@ async def security_middleware(request: Request, call_next):
     else:
         response = await call_next(request)
 
-    # データ変更POSTのあとに状態をファイルへ保存
+    # データ変更POSTのあとに状態をKVへ保存
     if (request.method == "POST"
             and request.url.path.startswith("/api/")
             and request.url.path not in ("/api/login", "/api/logout")
             and response.status_code < 400):
-        save_state()
+        await save_state(request)
 
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -1901,7 +1885,7 @@ async def login_api(request: Request, body: dict):
         TOTAL_FAILURES[ip] = TOTAL_FAILURES.get(ip, 0) + 1
         if TOTAL_FAILURES[ip] >= PERMANENT_BAN_THRESHOLD:
             PERMANENT_BANS.add(ip)
-            save_state()
+            await save_state(request)
             return JSONResponse({"ok": False, "msg": "このアクセス元は永久にブロックされています。"}, status_code=403)
         return JSONResponse({"ok": False, "msg": "ユーザー名またはパスワードが違います。"}, status_code=401)
 
