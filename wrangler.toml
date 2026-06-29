@@ -5,4 +5,4 @@ compatibility_flags = ["python_workers"]
 
 [[kv_namespaces]]
 binding = "STATE_KV"
-id = "f07434a10a6c4406b5cb0d1909c071f3"
+id = "0f70862e45bc4f7d997de980cd1f8b21"
