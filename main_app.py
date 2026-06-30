@@ -11,7 +11,7 @@ from starlette.routing import Route
 
 import state as st
 import auth as au
-from templates import LOGIN_HTML, HTML
+from templates import HTML
 
 ALLOWED_HOST_SUFFIXES = tuple(
     x.strip()
@@ -29,21 +29,6 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         host = (request.headers.get("host") or "").split(":")[0]
         if host and not any(host == a or host.endswith(a) for a in ALLOWED_HOST_SUFFIXES):
             return JSONResponse({"ok": False, "msg": "invalid host"}, status_code=400)
-
-        request.state.session = au.parse_session_value(request.cookies.get(au.SESSION_COOKIE))
-
-        if request.url.path.startswith("/api/") and request.url.path not in ("/api/login",):
-            if not au.is_authenticated(request):
-                return JSONResponse({"ok": False, "msg": "authentication required"}, status_code=401)
-
-        if request.method == "POST" and request.url.path.startswith("/api/") and request.url.path not in ("/api/login",):
-            session = getattr(request.state, "session", None) or {}
-            csrf_header = request.headers.get("x-csrf-token", "")
-            if not csrf_header or csrf_header != session.get("csrf"):
-                return JSONResponse({"ok": False, "msg": "invalid csrf token"}, status_code=403)
-
-        if request.url.path == "/" and not au.is_authenticated(request):
-            return self._with_headers(HTMLResponse(LOGIN_HTML))
 
         response = await call_next(request)
 
@@ -69,10 +54,7 @@ class SecurityMiddleware(BaseHTTPMiddleware):
 
 
 async def home(request: Request):
-    session = getattr(request.state, "session", None)
-    if not session:
-        return HTMLResponse(LOGIN_HTML)
-    return HTMLResponse(HTML.replace("__CSRF_TOKEN__", session["csrf"]))
+    return HTMLResponse(HTML.replace("__CSRF_TOKEN__", "no-auth"))
 
 
 async def login_api(request: Request):
