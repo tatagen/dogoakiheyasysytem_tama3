@@ -1,6 +1,6 @@
 LOGIN_HTML = r"""<!doctype html>
 <meta charset="utf-8">
-<title>旅館管理｜ログイン</title>
+<title>温泉旅館管理｜ログイン</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
   :root{ --line:#e6e6e6; --ink:#111; --muted:#666; }
@@ -61,7 +61,7 @@ LOGIN_HTML = r"""<!doctype html>
 </style>
 <div class="panel">
   <h1>ログイン</h1>
-  <p>旅館 空き部屋管理</p>
+  <p>温泉旅館 空き部屋管理</p>
   <form id="loginForm">
     <label for="username">ユーザー名</label>
     <input id="username" name="username" autocomplete="username" required>
@@ -103,7 +103,7 @@ document.getElementById('loginForm').addEventListener('submit', async (e)=>{
 
 HTML = r"""<!doctype html>
 <meta charset="utf-8">
-<title>旅館｜空き部屋管理</title>
+<title>温泉旅館｜空き部屋管理</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
   /* ===== パターンC：和風・温かみ ===== */
@@ -324,7 +324,7 @@ HTML = r"""<!doctype html>
   <div class="wa-header-logo">
     <div class="wa-header-mark">♨</div>
     <div>
-      <div class="wa-header-title">旅館｜空き部屋管理</div>
+      <div class="wa-header-title">温泉旅館｜空き部屋管理</div>
     </div>
   </div>
   <div class="wa-kpi-row">
